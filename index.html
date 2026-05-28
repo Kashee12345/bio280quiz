@@ -7158,5 +7158,331 @@ window.BIO280_BOSS_TAUNTS = {
   }
 })();
 </script>
+<!-- ============================================================================
+     BIO280 JOYCE QUIZSHOW — Google Analytics 4 + Custom Education Events
+     ============================================================================
+     SETUP (one time, ~5 minutes):
+     1. Go to https://analytics.google.com  → sign in with a Google account
+     2. Admin (gear, bottom-left) → Create → Property
+        - Name it "BIO280 Joyce QuizShow", set your timezone, click Next a few times
+     3. Choose platform "Web" → enter your GitHub Pages URL
+        (https://kashee12345.github.io/bio280quiz/) → name it "BIO280" → Create stream
+     4. Copy the "Measurement ID" — it looks like  G-6CY0PC2YTV
+     5. Find-and-replace  G-6CY0PC2YTV  below with YOUR id (appears 2 times), save, redeploy.
+        (Or just send me the ID and I'll paste it in for you.)
+     ============================================================================ -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-6CY0PC2YTV"></script>
+<script>
+(function(){
+  /* ---- GA4 base ---- */
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){ dataLayer.push(arguments); }
+  window.gtag = gtag;
+  gtag('js', new Date());
+  // anonymize_ip + no ad personalization = privacy-respectful classroom default
+  gtag('config', 'G-6CY0PC2YTV', { anonymize_ip: true, allow_google_signals: false });
+
+  var GA_READY = true;
+
+  /* ---- helper: safe event sender ---- */
+  function bioTrack(name, params){
+    try { if (GA_READY && typeof gtag === 'function') gtag('event', name, params || {}); } catch(e){}
+  }
+  window.bioTrack = bioTrack;
+
+  /* ---- anonymous learner id (no PII; just to count distinct devices) ---- */
+  try {
+    var lid = localStorage.getItem('bio280_learner_id');
+    if (!lid) { lid = 'L' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); localStorage.setItem('bio280_learner_id', lid); }
+    gtag('set', { user_id: lid });
+  } catch(e){}
+
+  /* ---- app open ---- */
+  bioTrack('app_open', { ts: Date.now() });
+
+  /* ---- wrap lifecycle once the game's functions exist ---- */
+  function attach(){
+    if (window.___bio280_analytics_attached) return true;
+    if (typeof window.startGame !== 'function' || typeof window.endGame !== 'function') return false;
+    window.___bio280_analytics_attached = true;
+
+    /* QUIZ START — which study mode the student picked */
+    var _start = window.startGame;
+    window.startGame = function(key){
+      try {
+        var mode = (window.pending && (window.pending.label || window.pending.shortLabel)) || key || 'unknown';
+        var modeShort = (window.pending && window.pending.shortLabel) || key || '';
+        var joyce = !!(window.pending && window.pending.joyceSim);
+        window.___bio280_startTs = Date.now();
+        bioTrack('quiz_start', {
+          mode: mode,
+          mode_short: modeShort,
+          joyce_sim: joyce,
+          batch_key: key
+        });
+      } catch(e){}
+      return _start.apply(this, arguments);
+    };
+
+    /* QUIZ COMPLETE — score, accuracy, win/lose, weakest topic */
+    var _end = window.endGame;
+    window.endGame = function(won){
+      try {
+        var s = window.state || {};
+        var answered = s.answered || 0;
+        var correct = s.correct || 0;
+        var acc = answered ? Math.round(correct / answered * 100) : 0;
+        var durSec = window.___bio280_startTs ? Math.round((Date.now() - window.___bio280_startTs) / 1000) : null;
+
+        // weakest topic from this session
+        var weakest = null, weakestPct = 101;
+        if (s.session && s.session.length) {
+          var byTopic = {};
+          s.session.forEach(function(e){ var t = byTopic[e.topic] || (byTopic[e.topic] = {c:0,n:0}); t.n++; if (e.correct) t.c++; });
+          Object.keys(byTopic).forEach(function(t){
+            var p = byTopic[t].n ? (byTopic[t].c / byTopic[t].n * 100) : 100;
+            if (p < weakestPct) { weakestPct = p; weakest = t; }
+          });
+        }
+
+        bioTrack('quiz_complete', {
+          mode: s.modeLabel || (window.pending && window.pending.label) || 'unknown',
+          mode_short: s.shortLabel || '',
+          won: !!won,
+          score: s.score || 0,
+          accuracy: acc,
+          questions_answered: answered,
+          correct: correct,
+          wrong: s.wrong || 0,
+          max_streak: s.maxStreak || 0,
+          duration_sec: durSec,
+          weakest_topic: weakest || 'none',
+          joyce_sim: !!s.joyceSim
+        });
+      } catch(e){}
+      return _end.apply(this, arguments);
+    };
+
+    /* DR. GARG REVEAL — the "beat the whole course" milestone */
+    if (typeof window.triggerGargReveal === 'function') {
+      var _reveal = window.triggerGargReveal;
+      window.triggerGargReveal = function(){
+        bioTrack('final_boss_defeated', { milestone: 'patho_prime_cleared' });
+        return _reveal.apply(this, arguments);
+      };
+    }
+
+    return true;
+  }
+
+  if (!attach()) {
+    var tries = 0;
+    var iv = setInterval(function(){ tries++; if (attach() || tries > 60) clearInterval(iv); }, 100);
+  }
+
+  console.log('✅ BIO280 analytics attached — GA4 + custom education events');
+})();
+</script>
+<!-- ============================================================================
+     BIO280 — Advanced Engagement Analytics (v2)
+     Adds 5 deeper metrics on top of the GA4 base:
+       1. Session length + voluntary return rate
+       2. Mid-session abandonment + drop-off point (stopped vs finished, at what Q)
+       3. Sessions per week per student
+       4. Speed-run / button-mash detection (answer times)
+       5. Replay behavior (replaying levels already passed = enjoyment)
+     Depends on window.bioTrack (defined in the GA4 base patch above).
+     ============================================================================ -->
+<script>
+(function(){
+  if (window.___bio280_analytics_v2) return;
+  window.___bio280_analytics_v2 = true;
+
+  function track(name, params){
+    try { if (typeof window.bioTrack === 'function') window.bioTrack(name, params || {});
+          else if (typeof window.gtag === 'function') window.gtag('event', name, params || {}); } catch(e){}
+  }
+
+  /* =========================================================================
+     1 + 3.  SESSION + RETURN-RATE + SESSIONS-PER-WEEK  (computed on load)
+     ========================================================================= */
+  var SESSION_START = Date.now();
+  var QUIZZES_THIS_SESSION = 0;
+
+  (function trackReturn(){
+    try {
+      var now = Date.now();
+      var lastVisit = parseInt(localStorage.getItem('bio280_last_visit') || '0', 10);
+      var visitCount = parseInt(localStorage.getItem('bio280_visit_count') || '0', 10) + 1;
+      var dates = JSON.parse(localStorage.getItem('bio280_visit_dates') || '[]');
+      dates.push(now);
+      // keep only last 60 visit timestamps
+      dates = dates.slice(-60);
+      // sessions in the last 7 days
+      var weekAgo = now - 7 * 86400000;
+      var sessionsThisWeek = dates.filter(function(t){ return t >= weekAgo; }).length;
+      var daysSinceLast = lastVisit ? Math.round((now - lastVisit) / 86400000 * 10) / 10 : -1;
+
+      localStorage.setItem('bio280_last_visit', String(now));
+      localStorage.setItem('bio280_visit_count', String(visitCount));
+      localStorage.setItem('bio280_visit_dates', JSON.stringify(dates));
+
+      track('session_start', {
+        visit_number: visitCount,                 // 1 = brand new student
+        is_returning: visitCount > 1,             // voluntary return!
+        days_since_last_visit: daysSinceLast,     // -1 = first ever
+        sessions_this_week: sessionsThisWeek      // frequency
+      });
+    } catch(e){}
+  })();
+
+  /* Session END — total time in app (fires on tab close / app background) */
+  var sessionEnded = false;
+  function endSession(reason){
+    if (sessionEnded) return;
+    sessionEnded = true;
+    var durSec = Math.round((Date.now() - SESSION_START) / 1000);
+    track('session_end', {
+      session_duration_sec: durSec,
+      session_duration_min: Math.round(durSec / 6) / 10,
+      quizzes_played: QUIZZES_THIS_SESSION,
+      end_reason: reason || 'unload'
+    });
+  }
+  window.addEventListener('beforeunload', function(){ checkAbandon('unload'); endSession('unload'); });
+  document.addEventListener('visibilitychange', function(){
+    if (document.visibilityState === 'hidden') { checkAbandon('background'); endSession('background'); }
+    else if (document.visibilityState === 'visible') { sessionEnded = false; SESSION_START = Date.now(); }
+  });
+
+  /* =========================================================================
+     2.  ABANDONMENT + DROP-OFF POINT  (stopped mid-quiz vs finished, at what Q)
+     ========================================================================= */
+  var quizInProgress = false;
+  var abandonReported = false;
+
+  function checkAbandon(reason){
+    if (!quizInProgress || abandonReported) return;
+    abandonReported = true;
+    try {
+      var s = window.state || {};
+      var total = s.n || 0;
+      var answered = s.answered || 0;
+      track('quiz_abandoned', {
+        mode: s.modeLabel || (window.pending && window.pending.label) || 'unknown',
+        mode_short: s.shortLabel || '',
+        quit_at_question: answered,                                   // they stopped after answering N
+        total_questions: total,
+        percent_through: total ? Math.round(answered / total * 100) : 0,
+        score_at_quit: s.score || 0,
+        reason: reason || 'unload'
+      });
+    } catch(e){}
+  }
+
+  /* =========================================================================
+     ATTACH to game lifecycle (wait for functions to exist)
+     ========================================================================= */
+  function attach(){
+    if (window.___bio280_v2_attached) return true;
+    if (typeof window.startGame !== 'function' || typeof window.endGame !== 'function' ||
+        typeof window.renderQuestion !== 'function' || typeof window.resolve !== 'function') return false;
+    window.___bio280_v2_attached = true;
+
+    /* ---- helpers for replay tracking ---- */
+    function completedModes(){ try { return JSON.parse(localStorage.getItem('bio280_completed_modes') || '{}'); } catch(e){ return {}; } }
+    function saveCompleted(m){ try { localStorage.setItem('bio280_completed_modes', JSON.stringify(m)); } catch(e){} }
+
+    /* ---- 4. per-question answer timing: record when a question appears ---- */
+    var _render = window.renderQuestion;
+    window.renderQuestion = function(){
+      var r = _render.apply(this, arguments);
+      try { if (window.state) window.state._qShownAt = Date.now(); } catch(e){}
+      return r;
+    };
+
+    /* ---- 4. capture answer time on every resolve ---- */
+    var _resolve = window.resolve;
+    window.resolve = function(isCorrect, verdict){
+      try {
+        var s = window.state;
+        if (s && s._qShownAt) {
+          var sec = (Date.now() - s._qShownAt) / 1000;
+          s._answerTimes = s._answerTimes || [];
+          s._answerTimes.push(sec);
+          if (sec < 1.5) s._fastAnswers = (s._fastAnswers || 0) + 1;   // button-mash suspicion
+        }
+      } catch(e){}
+      return _resolve.apply(this, arguments);
+    };
+
+    /* ---- START: replay detection + reset timing + mark in-progress ---- */
+    var _start = window.startGame;
+    window.startGame = function(key){
+      try {
+        var modeKey = (window.pending && window.pending.shortLabel) || key || 'unknown';
+        var cm = completedModes();
+        var timesBefore = cm[modeKey] || 0;
+        QUIZZES_THIS_SESSION++;
+        quizInProgress = true;
+        abandonReported = false;
+        // stash for use at endGame
+        window.___bio280_replayInfo = { modeKey: modeKey, timesBefore: timesBefore };
+        track('quiz_start_detail', {
+          mode_short: modeKey,
+          is_replay: timesBefore > 0,                 // replaying a beaten level = enjoyment
+          times_completed_before: timesBefore
+        });
+      } catch(e){}
+      return _start.apply(this, arguments);
+    };
+
+    /* ---- END: timing summary + replay update + clear in-progress ---- */
+    var _end = window.endGame;
+    window.endGame = function(won){
+      try {
+        quizInProgress = false;     // natural finish — not an abandonment
+        var s = window.state || {};
+        var times = s._answerTimes || [];
+        var avg = times.length ? (times.reduce(function(a,b){return a+b;},0) / times.length) : 0;
+        var fastest = times.length ? Math.min.apply(null, times) : 0;
+        var ri = window.___bio280_replayInfo || { modeKey:'unknown', timesBefore:0 };
+
+        track('quiz_quality', {
+          mode_short: s.shortLabel || ri.modeKey,
+          finished: true,                                       // reached a natural end
+          outran_bot: !!won,                                    // won = cleared the round
+          questions_answered: s.answered || 0,
+          total_questions: s.n || 0,
+          completion_pct: (s.n ? Math.round((s.answered||0)/s.n*100) : 0),
+          avg_answer_sec: Math.round(avg * 10) / 10,
+          fastest_answer_sec: Math.round(fastest * 10) / 10,
+          fast_answer_count: s._fastAnswers || 0,               // suspiciously fast (<1.5s)
+          fast_answer_ratio: ((s.answered ? (s._fastAnswers||0)/s.answered : 0) * 100) | 0,
+          is_replay: ri.timesBefore > 0,
+          times_completed_before: ri.timesBefore
+        });
+
+        // update completed-modes count if they WON (cleared it)
+        if (won) {
+          var cm = completedModes();
+          cm[ri.modeKey] = (cm[ri.modeKey] || 0) + 1;
+          saveCompleted(cm);
+        }
+      } catch(e){}
+      return _end.apply(this, arguments);
+    };
+
+    return true;
+  }
+
+  if (!attach()) {
+    var tries = 0;
+    var iv = setInterval(function(){ tries++; if (attach() || tries > 80) clearInterval(iv); }, 100);
+  }
+
+  console.log('✅ BIO280 advanced engagement analytics attached — sessions, return rate, drop-off, speed-runs, replays');
+})();
+</script>
 </body>
 </html>
